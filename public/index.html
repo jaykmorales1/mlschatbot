@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Local ChatGPT</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div class="logo-circle">GPT</div>
+        <div>
+          <h1>Local ChatGPT</h1>
+          <p>Powered by your OpenAI API key</p>
+        </div>
+      </header>
+
+      <main id="chat" class="chat"></main>
+
+      <form id="chat-form" class="input-area">
+        <textarea
+          id="user-input"
+          placeholder="Send a message..."
+          rows="1"
+          autocomplete="off"
+        ></textarea>
+        <button type="submit">Send</button>
+      </form>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
