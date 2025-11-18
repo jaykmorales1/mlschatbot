@@ -160,3 +160,52 @@ button[type="submit"]:disabled {
   background: #111827;
   border-radius: 999px;
 }
+
+/* ============================= */
+/*        MOBILE STYLING         */
+/* ============================= */
+@media (max-width: 768px) {
+  body {
+    padding: 0;
+    margin: 0;
+  }
+
+  .app {
+    max-width: 100%;
+    padding: 8px;
+    height: 100vh;
+  }
+
+  .header {
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+
+  .chat {
+    padding: 8px;
+    border-radius: 14px;
+    gap: 8px;
+  }
+
+  .message-bubble {
+    max-width: 100%;
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+
+  .input-area {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 14px;
+  }
+
+  #user-input {
+    font-size: 13px;
+    max-height: 96px;
+  }
+
+  button[type="submit"] {
+    padding: 7px 12px;
+    font-size: 13px;
+  }
+}
