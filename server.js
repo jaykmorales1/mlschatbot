@@ -180,24 +180,41 @@ function getListingByIndex(idx) {
   };
 }
 
-// Look up by address-ish string (very fuzzy)
+// --------- ADDRESS MATCHING HELPERS (IMPROVED) ---------
+function normalizeAddressLike(str) {
+  if (!str) return '';
+  return String(str)
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')   // remove punctuation
+    .replace(/\s+/g, ' ')       // collapse whitespace
+    .trim();
+}
+
+// Look up by address-ish string, even if the user message has extra words
 function findListingByAddressLike(text) {
   if (!text) return null;
-  const needle = text.toLowerCase().replace(/\s+/g, ' ').trim();
 
+  const textNorm = normalizeAddressLike(text);
   let best = null;
 
   mlsRows.forEach((row, i) => {
-    const addr = formatAddress(row).toLowerCase().replace(/\s+/g, ' ').trim();
-    if (!addr) return;
-    if (addr.includes(needle)) {
-      if (!best || addr.length < best.addr.length) {
-        best = { rowIndex: i, row, addr: formatAddress(row) };
+    const addr = formatAddress(row);
+    const addrNorm = normalizeAddressLike(addr);
+    if (!addrNorm) return;
+
+    // Accept either "full address inside message" or the reverse
+    if (
+      textNorm.includes(addrNorm) ||
+      addrNorm.includes(textNorm)
+    ) {
+      if (!best || addrNorm.length < best.addrNorm.length) {
+        best = { rowIndex: i, row, addr, addrNorm };
       }
     }
   });
 
   if (!best) return null;
+
   return {
     rowIndex: best.rowIndex,
     row: best.row,
@@ -205,7 +222,7 @@ function findListingByAddressLike(text) {
   };
 }
 
-// Filter helpers for list queries
+// --------- FILTERING & LIST OUTPUT ---------
 function filterRowsForList({ city, maxPrice, minBeds, loanTermsIncludes }) {
   const cityNeedle = city ? city.toLowerCase() : null;
   const loanNeedle = loanTermsIncludes
@@ -238,7 +255,6 @@ function filterRowsForList({ city, maxPrice, minBeds, loanTermsIncludes }) {
   });
 }
 
-// Create a numbered list + update lastList, with optional extra fields per row
 function formatListOutput(rows, { limit = 50, fields = [] } = {}) {
   const fieldsLower = (fields || []).map((f) => String(f).toLowerCase());
   const wantsAllData =
@@ -513,7 +529,7 @@ app.post('/api/chat', async (req, res) => {
   const lastN = plan.lastN ?? null; // not used yet, but kept for future
   const countOnly = !!plan.countOnly;
   const fields = Array.isArray(plan.fields) ? plan.fields : null;
-  const useLastListing = !!plan.useLastListing;
+  const useLastListing = !!plan.useLastListing; // currently unused, kept for future
 
   let reply = '';
 
