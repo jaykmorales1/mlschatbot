@@ -11,6 +11,9 @@ let messageHistory = [
   },
 ];
 
+// ----------------------------------------------------
+// Add message to UI
+// ----------------------------------------------------
 function addMessage(role, text) {
   const row = document.createElement('div');
   row.className = `message-row ${role === 'user' ? 'user' : 'assistant'}`;
@@ -24,22 +27,25 @@ function addMessage(role, text) {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
+// ----------------------------------------------------
+// Submit / Send message
+// ----------------------------------------------------
 formEl.addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = inputEl.value.trim();
   if (!text) return;
 
-  // Show user message
+  // Add user message visually
   addMessage('user', text);
 
-  // Add to history
+  // Add to chat history
   messageHistory.push({ role: 'user', content: text });
 
   // Clear input
   inputEl.value = '';
   resizeTextarea();
 
-  // Disable while waiting
+  // Disable UI while waiting
   const submitButton = formEl.querySelector('button[type="submit"]');
   submitButton.disabled = true;
   submitButton.textContent = 'Thinking...';
@@ -68,11 +74,24 @@ formEl.addEventListener('submit', async (e) => {
   }
 });
 
-// Auto-resize textarea like ChatGPT
+// ----------------------------------------------------
+// Auto-resize textarea
+// ----------------------------------------------------
 function resizeTextarea() {
   inputEl.style.height = 'auto';
   inputEl.style.height = inputEl.scrollHeight + 'px';
 }
-
 inputEl.addEventListener('input', resizeTextarea);
 resizeTextarea();
+
+// ----------------------------------------------------
+// ENTER = SEND, SHIFT+ENTER = NEW LINE
+// ----------------------------------------------------
+inputEl.addEventListener('keydown', (e) => {
+  // Enter without Shift → send message
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    formEl.dispatchEvent(new Event('submit'));
+  }
+  // Shift+Enter = regular newline
+});
