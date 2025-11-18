@@ -14,7 +14,6 @@ let mlsColumns = [];
 try {
   const raw = fs.readFileSync('./data/Active Listings.csv', 'utf8');
 
-  // Some exports have a bogus first header like "Full-4"
   const fixedRaw = raw.startsWith('Full-4')
     ? raw.split('\n').slice(1).join('\n')
     : raw;
@@ -47,11 +46,11 @@ try {
 app.use(express.json());
 app.use(express.static('public'));
 
-// -------------------- IN-MEMORY CONVERSATION STATE --------------------
+// -------------------- IN-MEMORY STATE --------------------
 let lastList = [];      // [{ rowIndex, displayAddress }]
 let lastListing = null; // { rowIndex, displayAddress }
 
-// -------------------- HELPER FUNCTIONS --------------------
+// -------------------- HELPERS --------------------
 function formatAddress(row) {
   const num = row.StreetNumberNumeric || row.StreetNumber || '';
   const dirPre = row.StreetDirPrefix || '';
@@ -60,140 +59,28 @@ function formatAddress(row) {
   const city = row.City || '';
   const state = row.StateOrProvince || 'CA';
   const zip = row.PostalCode || '';
+
   const parts = [
     [num, dirPre, name, suffix].filter(Boolean).join(' '),
     city,
     state,
     zip,
   ].filter(Boolean);
+
   return parts.join(', ');
 }
 
-function formatBedsBaths(row) {
-  const beds = row.BedroomsTotal || row.Bedrooms || null;
-  let baths =
-    row.BathroomsTotalInteger ||
-    row.BathroomsFull ||
-    row.Bathrooms ||
-    null;
-
-  if (!row.BathroomsTotalInteger) {
-    const full = Number(row.BathroomsFull || 0);
-    const threeQuarter = Number(row.BathroomsThreeQuarter || 0);
-    const half = Number(row.BathroomsHalf || 0);
-    const quarter = Number(row.BathroomsOneQuarter || 0);
-    const est = full + threeQuarter * 0.75 + half * 0.5 + quarter * 0.25;
-    if (est > 0) baths = est;
-  }
-
-  const bedsText = beds != null && beds !== '' ? `${beds} beds` : 'beds N/A';
-  const bathsText =
-    baths != null && baths !== ''
-      ? `${baths} baths`
-      : 'baths N/A';
-
-  return { beds, baths, text: `${bedsText}, ${bathsText}` };
-}
-
-function formatPrice(row) {
-  const priceRaw = row.ListPrice || row.CurrentPrice;
-  if (!priceRaw) return 'Price not in CSV';
-  const num = Number(priceRaw);
-  if (Number.isNaN(num)) return String(priceRaw);
-  return '$' + num.toLocaleString();
-}
-
-function formatLoanTerms(row) {
-  const terms = row.ListingTerms || row.LoanPayment || '';
-  return terms || 'Loan/financing terms not specified in CSV.';
-}
-
-function formatSqft(row) {
-  const sqft =
-    row.LivingArea ||
-    row.BuildingAreaTotal ||
-    row.ResidentialSquareFootage ||
-    row.TotalBuildingNRA;
-  if (!sqft) return 'Square footage not in CSV.';
-  const num = Number(sqft);
-  if (Number.isNaN(num)) return `${sqft} sq ft (raw)`;
-  return `${num.toLocaleString()} sq ft`;
-}
-
-function formatDescription(row) {
-  const pub = (row.PublicRemarks || '').trim();
-  const priv = (row.PrivateRemarks || '').trim();
-  const parts = [];
-  if (pub) parts.push(`Public remarks: ${pub}`);
-  if (priv) parts.push(`Private remarks: ${priv}`);
-  if (!parts.length) return 'No remarks available in the CSV for this listing.';
-  return parts.join('\n\n');
-}
-
-function formatAgent(row) {
-  const first = row.ListAgentFirstName || '';
-  const last = row.ListAgentLastName || '';
-  const name = (first + ' ' + last).trim() || 'Listing agent not in CSV';
-  return name;
-}
-
-function formatAgentContact(row) {
-  const name = formatAgent(row);
-  const mobile = row.ListAgentMobilePhone || row.CoListAgentMobilePhone || '';
-  const direct = row.ListAgentDirectPhone || '';
-  const email = row.ListAgentEmail || '';
-  const office = row.ListOfficeName || '';
-  const officePhone = row.ListOfficePhone || '';
-
-  const lines = [`Agent: ${name}`];
-  if (mobile) lines.push(`Mobile: ${mobile}`);
-  if (direct && direct !== mobile) lines.push(`Direct: ${direct}`);
-  if (email) lines.push(`Email: ${email}`);
-  if (office) lines.push(`Office: ${office}`);
-  if (officePhone) lines.push(`Office phone: ${officePhone}`);
-
-  return lines.join('\n');
-}
-
-// Full raw row (clean, only non-empty fields)
-function formatFullRow(row) {
-  const lines = [];
-  for (const col of mlsColumns) {
-    const val = row[col];
-    if (val !== undefined && val !== null && String(val).trim() !== '') {
-      lines.push(`${col}: ${val}`);
-    }
-  }
-  if (!lines.length) return 'No data available for this listing row.';
-  return lines.join('\n');
-}
-
-// Look up listing by index from last list (#1, #2, etc.)
-function getListingByIndex(idx) {
-  if (!lastList.length) return null;
-  const item = lastList[idx - 1];
-  if (!item) return null;
-  return {
-    rowIndex: item.rowIndex,
-    row: mlsRows[item.rowIndex],
-    displayAddress: item.displayAddress,
-  };
-}
-
-// --------- ADDRESS MATCHING HELPERS (IMPROVED) ---------
 function normalizeAddressLike(str) {
   if (!str) return '';
   return String(str)
     .toLowerCase()
-    .replace(/[^\w\s]/g, ' ')   // remove punctuation
-    .replace(/\s+/g, ' ')       // collapse whitespace
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
-// Look up by address-ish string, even if the user message has extra words
 function findListingByAddressLike(text) {
   if (!text) return null;
-
   const textNorm = normalizeAddressLike(text);
   let best = null;
 
@@ -202,11 +89,7 @@ function findListingByAddressLike(text) {
     const addrNorm = normalizeAddressLike(addr);
     if (!addrNorm) return;
 
-    // Accept either "full address inside message" or the reverse
-    if (
-      textNorm.includes(addrNorm) ||
-      addrNorm.includes(textNorm)
-    ) {
+    if (textNorm.includes(addrNorm) || addrNorm.includes(textNorm)) {
       if (!best || addrNorm.length < best.addrNorm.length) {
         best = { rowIndex: i, row, addr, addrNorm };
       }
@@ -214,7 +97,6 @@ function findListingByAddressLike(text) {
   });
 
   if (!best) return null;
-
   return {
     rowIndex: best.rowIndex,
     row: best.row,
@@ -222,52 +104,197 @@ function findListingByAddressLike(text) {
   };
 }
 
-// --------- FILTERING & LIST OUTPUT ---------
-function filterRowsForList({ city, maxPrice, minBeds, loanTermsIncludes }) {
-  const cityNeedle = city ? city.toLowerCase() : null;
-  const loanNeedle = loanTermsIncludes
-    ? loanTermsIncludes.toLowerCase()
-    : null;
+function getColumnNameFromUserField(userField) {
+  if (!userField) return null;
+  const f = String(userField).trim();
 
-  return mlsRows.filter((row) => {
-    if (cityNeedle) {
-      const rowCity = (row.City || '').toLowerCase();
-      if (!rowCity.includes(cityNeedle)) return false;
-    }
+  // if they already passed exact column name, use it directly if present
+  if (mlsColumns.includes(f)) return f;
 
-    if (maxPrice != null) {
-      const pRaw = row.ListPrice || row.CurrentPrice;
-      const pNum = Number(pRaw);
-      if (!pRaw || Number.isNaN(pNum) || pNum > maxPrice) return false;
-    }
+  const lower = f.toLowerCase();
 
-    if (minBeds != null) {
-      const b = Number(row.BedroomsTotal || row.Bedrooms || 0);
-      if (Number.isNaN(b) || b < minBeds) return false;
-    }
+  // common friendly names
+  const synonyms = {
+    address: null, // handled specially
+    beds: 'BedroomsTotal',
+    bedrooms: 'BedroomsTotal',
+    baths: 'BathroomsTotalInteger',
+    bathrooms: 'BathroomsTotalInteger',
+    price: 'ListPrice',
+    'current price': 'CurrentPrice',
+    dom: 'DaysOnMarket',
+    'days on market': 'DaysOnMarket',
+    cdom: 'CumulativeDaysOnMarket',
+    'cumulative days on market': 'CumulativeDaysOnMarket',
+    zipcode: 'PostalCode',
+    'zip code': 'PostalCode',
+    'postal code': 'PostalCode',
+    zip: 'PostalCode',
+    sqft: 'LivingArea',
+    'square footage': 'LivingArea',
+    description: 'PublicRemarks',
+    remarks: 'PublicRemarks',
+    'loan terms': 'ListingTerms',
+    financing: 'ListingTerms',
+    'high school district': 'HighSchoolDistrict',
+    'year built': 'YearBuilt',
+  };
 
-    if (loanNeedle) {
-      const terms = (row.ListingTerms || '').toLowerCase();
-      if (!terms.includes(loanNeedle)) return false;
-    }
+  if (synonyms[lower] !== undefined) {
+    return synonyms[lower]; // may be null for "address"
+  }
 
-    return true;
-  });
+  // try case-insensitive match on actual columns
+  const exactInsensitive = mlsColumns.find(
+    (c) => c.toLowerCase() === lower
+  );
+  if (exactInsensitive) return exactInsensitive;
+
+  // fuzzy: find column that contains this phrase
+  const contains = mlsColumns.find((c) =>
+    c.toLowerCase().includes(lower)
+  );
+  if (contains) return contains;
+
+  return null;
 }
 
-function formatListOutput(rows, { limit = 50, fields = [] } = {}) {
-  const fieldsLower = (fields || []).map((f) => String(f).toLowerCase());
-  const wantsAllData =
-    fieldsLower.includes('all_data') ||
-    fieldsLower.includes('full_profile') ||
-    fieldsLower.includes('all_info') ||
-    fieldsLower.includes('full_property_profile');
+function getValue(row, userField) {
+  const colName = getColumnNameFromUserField(userField);
 
-  // If they want EVERYTHING for each listing, cap at 10 to keep it readable.
-  const effectiveLimit = wantsAllData ? Math.min(limit, 10) : limit;
+  if (colName === null) {
+    // special "address"
+    const lower = String(userField).toLowerCase();
+    if (lower === 'address') {
+      return formatAddress(row);
+    }
+    // fallback: try raw field as column
+    if (row[userField] !== undefined) return row[userField];
+    return '';
+  }
 
-  const limited = rows.slice(0, effectiveLimit);
-  lastList = limited.map((row, idx) => ({
+  if (colName === 'ListPrice' || colName === 'CurrentPrice' || colName === 'ClosePrice') {
+    const raw = row[colName];
+    if (!raw) return '';
+    const num = Number(raw);
+    if (Number.isNaN(num)) return raw;
+    return '$' + num.toLocaleString();
+  }
+
+  if (colName === 'BedroomsTotal' || colName === 'BathroomsTotalInteger' || colName === 'LivingArea') {
+    const raw = row[colName];
+    if (!raw) return '';
+    const num = Number(raw);
+    if (Number.isNaN(num)) return raw;
+    if (colName === 'LivingArea') return num.toLocaleString() + ' sq ft';
+    return String(num);
+  }
+
+  return row[colName] ?? '';
+}
+
+function applyFilter(row, filter) {
+  const { column, op, value } = filter;
+  const colName = getColumnNameFromUserField(column);
+  if (!colName) return false;
+
+  const raw = row[colName];
+  const val = raw == null ? '' : String(raw);
+  const numVal = Number(raw);
+  const numTarget = Number(value);
+
+  switch (op) {
+    case 'eq':
+      return val.toLowerCase() === String(value).toLowerCase();
+    case 'neq':
+      return val.toLowerCase() !== String(value).toLowerCase();
+    case 'contains':
+      return val.toLowerCase().includes(String(value).toLowerCase());
+    case 'not_contains':
+      return !val.toLowerCase().includes(String(value).toLowerCase());
+    case 'gt':
+      if (Number.isNaN(numVal) || Number.isNaN(numTarget)) return false;
+      return numVal > numTarget;
+    case 'ge':
+      if (Number.isNaN(numVal) || Number.isNaN(numTarget)) return false;
+      return numVal >= numTarget;
+    case 'lt':
+      if (Number.isNaN(numVal) || Number.isNaN(numTarget)) return false;
+      return numVal < numTarget;
+    case 'le':
+      if (Number.isNaN(numVal) || Number.isNaN(numTarget)) return false;
+      return numVal <= numTarget;
+    case 'exists':
+      return val.trim() !== '';
+    case 'not_exists':
+      return val.trim() === '';
+    default:
+      return true;
+  }
+}
+
+function filterRows(filters) {
+  if (!filters || !filters.length) return mlsRows;
+  return mlsRows.filter((row) =>
+    filters.every((f) => applyFilter(row, f))
+  );
+}
+
+function ensureListingFromIndex(index) {
+  if (!lastList.length) {
+    return { error: 'I do not have a recent list to pull index numbers from.' };
+  }
+  const item = lastList[index - 1];
+  if (!item) {
+    return { error: `I do not have a listing #${index} in the last list.` };
+  }
+  const row = mlsRows[item.rowIndex];
+  const displayAddress = item.displayAddress || formatAddress(row);
+  lastListing = { rowIndex: item.rowIndex, displayAddress, row };
+  return { row, displayAddress };
+}
+
+function formatDetails(row, fields) {
+  const addr = formatAddress(row);
+  if (!fields || !fields.length) {
+    // default summary
+    const summaryFields = [
+      'Address',
+      'ListPrice',
+      'BedroomsTotal',
+      'BathroomsTotalInteger',
+      'LivingArea',
+      'DaysOnMarket',
+      'YearBuilt',
+      'HighSchoolDistrict',
+      'PropertyType',
+      'PublicRemarks',
+    ];
+
+    const parts = [`${addr}`];
+    summaryFields.forEach((f) => {
+      const val = getValue(row, f);
+      if (val === '' || val == null) return;
+      const label = f === 'Address' ? 'Address' : f;
+      parts.push(`${label}: ${val}`);
+    });
+
+    return parts.join('\n');
+  }
+
+  const lines = [`${addr}`];
+  for (const f of fields) {
+    const val = getValue(row, f);
+    const label = String(f);
+    lines.push(`${label}: ${val || 'N/A'}`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatList(rows, fields, limit) {
+  const limited = rows.slice(0, limit || 100);
+  lastList = limited.map((row) => ({
     rowIndex: mlsRows.indexOf(row),
     displayAddress: formatAddress(row),
   }));
@@ -276,181 +303,168 @@ function formatListOutput(rows, { limit = 50, fields = [] } = {}) {
     return 'There are 0 listings that match your criteria.';
   }
 
+  const showFields = (fields || []).length ? fields : [];
+
   const lines = limited.map((row, i) => {
-    const address = formatAddress(row);
-    const base = `#${i + 1} ${address}`;
-
-    if (!fieldsLower.length) return base;
-
-    const extras = [];
-
-    if (fieldsLower.includes('price')) {
-      extras.push(`Price: ${formatPrice(row)}`);
+    const addr = formatAddress(row);
+    if (!showFields.length) {
+      return `#${i + 1} ${addr}`;
     }
-    if (fieldsLower.includes('beds') || fieldsLower.includes('baths')) {
-      const { text } = formatBedsBaths(row);
-      extras.push(text);
+    const parts = [];
+    for (const f of showFields) {
+      if (String(f).toLowerCase() === 'address') continue;
+      const val = getValue(row, f);
+      if (val === '' || val == null) continue;
+      parts.push(`${f}: ${val}`);
     }
-    if (
-      fieldsLower.includes('loan_terms') ||
-      fieldsLower.includes('terms') ||
-      fieldsLower.includes('financing')
-    ) {
-      extras.push(`Loan terms: ${formatLoanTerms(row)}`);
-    }
-
-    if (
-      fieldsLower.includes('description') ||
-      fieldsLower.includes('remarks')
-    ) {
-      const pub = (row.PublicRemarks || '').trim();
-      const priv = (row.PrivateRemarks || '').trim();
-      const desc =
-        pub || priv
-          ? (pub ? `Public: ${pub}` : '') +
-            (pub && priv ? ' | ' : '') +
-            (priv ? `Private: ${priv}` : '')
-          : 'No remarks in CSV.';
-      extras.push(desc);
-    }
-
-    if (wantsAllData) {
-      extras.push('\n' + formatFullRow(row));
-    }
-
-    if (!extras.length) return base;
-    return `${base} — ${extras.join(' | ')}`;
+    const extra = parts.length ? ' — ' + parts.join(' | ') : '';
+    return `#${i + 1} ${addr}${extra}`;
   });
 
   return `Here are up to ${limited.length} matching listings:\n` + lines.join('\n');
 }
 
-// -------------------- OPENAI PLANNER PROMPT --------------------
+// -------------------- PLANNER PROMPT --------------------
 const plannerSystemPrompt = `
-You are a planner for "Realtor GPT". 
-Your job: look at the conversation and return a SINGLE JSON object describing what the user wants.
-The Node server will actually read the MLS CSV and answer.
+You are the "planner" for Realtor GPT.
 
-MLS CSV facts:
-- Each row = one listing.
-- Important columns include:
-  - Address pieces: StreetNumber, StreetNumberNumeric, StreetDirPrefix, StreetName, StreetSuffix, City, StateOrProvince, PostalCode
-  - BedroomsTotal
-  - BathroomsTotalInteger (plus bathrooms component columns)
-  - ListPrice, CurrentPrice
-  - ListingTerms  (ex: "1031 Exchange, Cash, Cash to New Loan, Conventional, VA Loan")
-  - PublicRemarks, PrivateRemarks
-  - LivingArea, BuildingAreaTotal, ResidentialSquareFootage
-  - ListAgentFirstName, ListAgentLastName, ListAgentMobilePhone, ListAgentDirectPhone, ListAgentEmail, ListOfficeName, ListOfficePhone
+You ONLY return a single JSON object. The Node server will query the MLS CSV.
 
-In this app, **"property description" ALWAYS means: 
-PublicRemarks + PrivateRemarks, formatted nicely.**
+### CSV NOTES
 
-The server keeps:
-- A "last list" of results that it printed like "#1 ...", "#2 ...", etc.
-- A "lastListing" for the most recently discussed single listing.
+The CSV header includes many MLS-style columns, for example:
+- StreetNumber, StreetNumberNumeric, StreetDirPrefix, StreetName, StreetSuffix, City, StateOrProvince, PostalCode
+- BedroomsTotal, BathroomsTotalInteger, LivingArea, ListPrice, CurrentPrice
+- DaysOnMarket, CumulativeDaysOnMarket, OnMarketDate, OffMarketDate
+- YearBuilt, HighSchoolDistrict, PropertyType, PoolFeatures, GarageSpaces, ParkingTotal, LotSizeArea, LotSizeSquareFeet, etc.
+- PublicRemarks, PrivateRemarks, ListingTerms, HighSchoolDistrict
 
-### Your output format
+If the user mentions any REAL column name (e.g. "HighSchoolDistrict", "YearBuilt"), you must use it directly.
 
-Return ONLY a JSON object (no prose) with this structure:
+### FRIENDLY NAME → COLUMN
+
+Map these friendly names:
+
+- "beds", "bedrooms" -> "BedroomsTotal"
+- "baths", "bathrooms" -> "BathroomsTotalInteger"
+- "price" -> "ListPrice"
+- "current price" -> "CurrentPrice"
+- "DOM", "days on market" -> "DaysOnMarket"
+- "CDOM", "cumulative days on market" -> "CumulativeDaysOnMarket"
+- "zip", "zip code", "zipcode", "postal code" -> "PostalCode"
+- "year built" -> "YearBuilt"
+- "sqft", "square footage" -> "LivingArea"
+- "description", "remarks" -> "PublicRemarks"
+- "loan terms", "financing" -> "ListingTerms"
+- "high school district" -> "HighSchoolDistrict"
+
+### OUTPUT JSON
+
+Return ONLY a JSON object with this structure:
 
 {
-  "intent": string,     // REQUIRED
-  "city": string | null,
-  "maxPrice": number | null,
-  "minBeds": number | null,
-  "loanTermsIncludes": string | null,
-  "index": number | null,        // single index (#11, 11, "listing 11")
-  "indices": number[] | null,    // multiple indices (e.g. 33-35, 33 and 34)
-  "lastN": number | null,        // "last 10", "last 5" etc.
-  "countOnly": boolean | null,   // "how many listings ..."
-  "fields": string[] | null,     // WHAT INFO they want (for lists OR single listing)
-  "useLastListing": boolean | null  // true if "it", "them", "that one", "this property", etc.
+  "intent": "list" | "details" | "small_talk" | "unknown",
+
+  "filters": [
+    {
+      "column": string,                  // column name or friendly name
+      "op": "eq" | "neq" | "gt" | "lt" | "ge" | "le" | "contains" | "not_contains" | "exists" | "not_exists",
+      "value": string | number | null
+    }
+  ],
+
+  "fields": string[] | null,            // which fields/columns they want in the output
+
+  "targetType": "index" | "address" | "last" | null,
+  "index": number | null,               // for "#34", "listing 34", etc.
+
+  "limit": number | null,               // for lists: "top 10", "first 5"
+  "countOnly": boolean | null           // if they only want the number of matches
 }
 
-Allowed intent values (choose ONE):
+### RULES
 
-- "list_addresses_by_city"
-- "list_addresses_with_remarks"
-- "filtered_list_by_city_price_beds"
-- "listing_agent_for_index"
-- "listing_agent_for_address"
-- "beds_baths_for_index"
-- "beds_baths_for_address"
-- "loan_terms_for_index"
-- "loan_terms_for_address"
-- "description_for_index"
-- "description_for_address"
-- "details_for_index"
-- "details_for_address"
-- "average_price_by_city"
-- "full_profile_for_index"
-- "full_profile_for_address"
-- "full_profile_about_last_listing"
-- "followup_about_last_listing"
-- "small_talk"
-- "unknown"
+1. LIST queries:
+   - The user is clearly asking for multiple properties.
+   - Example phrases: "show me all ...", "list addresses ...", "give me a list ...", "how many listings ...".
+   - Set intent = "list".
+   - Use filters to describe conditions.
 
-### Rules
+   Examples:
 
-- If the user refers to "#11", "11", "number 11", "listing 11", etc. -> set "index" = 11.
-- If they mention a range like "33-34" -> indices = [33, 34].
-- If they say "last 10" or "for the last 10" -> lastN = 10.
-- If the message is JUST a number like "11" or "#11", they want **"details_for_index"** for that index.
-- If they say "property description for 11" or "#11" -> intent = "description_for_index".
-- "property description" ALWAYS refers to public + private remarks.
-- "beds", "bedrooms" -> BedroomsTotal.
-- "baths", "bathrooms" -> BathroomsTotalInteger.
-- "loan terms", "financing", "FHA / VA / Conventional" -> ListingTerms column.
-- Words like "FHA", "VA", "Conventional" -> loanTermsIncludes = "FHA" etc.
+   - "show me addresses in San Fernando under 900k with 3 or more beds"
+       -> intent: "list"
+          filters: [
+            { "column": "City", "op": "contains", "value": "San Fernando" },
+            { "column": "ListPrice", "op": "le", "value": 900000 },
+            { "column": "BedroomsTotal", "op": "ge", "value": 3 }
+          ]
+          fields: ["Address", "price", "beds", "baths"]
 
-- If they say things like:
-  - "what's the average price for houses in San Fernando"
-  - "average price of all homes in San Fernando"
-  -> intent = "average_price_by_city", with city = "San Fernando".
+   - "give me list of addresses in zip code 91340"
+       -> intent: "list"
+          filters: [
+            { "column": "PostalCode", "op": "eq", "value": "91340" }
+          ]
+          fields: ["Address"]
 
-- If they say "full rundown", "full profile", "all info", "all data", "full property profile":
-  - and they are clearly talking about ONE listing (by #, address, or pronoun like "it"):
-      -> use "full_profile_for_index", "full_profile_for_address", or "full_profile_about_last_listing".
-  - and they are asking for a LIST (e.g. "show me a list of all properties in San Fernando with all data", "full property profiles for San Fernando"):
-      -> intent = "list_addresses_by_city", city set, fields = ["all_data"].
+   - "show me all listings with a pool in Burbank"
+       -> filters: [
+            { "column": "City", "op": "contains", "value": "Burbank" },
+            { "column": "PoolFeatures", "op": "exists", "value": null }
+          ]
+          fields: ["Address", "PoolFeatures"]
 
-### fields usage
+   - "how many listings are in zip 91340?"
+       -> intent: "list"
+          countOnly: true
+          filters: [
+            { "column": "PostalCode", "op": "eq", "value": "91340" }
+          ]
 
-Use "fields" to specify WHAT extra info is wanted:
+2. DETAILS queries:
+   - The user asks about a single property.
+   - If they refer to "#12", "listing 12", just "12" etc -> targetType = "index", index = 12.
+   - If they write a full street address (number + street name, plus maybe city/state/zip) -> targetType = "address".
+   - If they say "it", "that one", "this property" referring to the previously discussed listing -> targetType = "last".
 
-For **list intents**:
-- "show me addresses in San Fernando with price next to them"
-  -> intent = "list_addresses_by_city", city = "San Fernando", fields = ["price"]
-- "addresses in San Fernando with beds and baths next to them"
-  -> intent = "list_addresses_by_city", fields = ["beds","baths"]
-- "addresses with price and loan terms"
-  -> intent = "list_addresses_by_city", fields = ["price","loan_terms"]
-- "list with all data" / "full property profiles"
-  -> intent = "list_addresses_by_city", fields = ["all_data"]
+   Set intent = "details".
 
-For **followups about a single listing**:
-- "its price" -> fields = ["price"]
-- "its agent" -> fields = ["agent"]
-- "its property description" -> fields = ["description"]
-- "its address" -> fields = ["address"]
-- "its square footage" -> fields = ["square_footage"]
-- "its contact info" -> fields = ["contact_info"]
-- "its full profile" / "all data" / "all info" -> fields = ["all_data"]
+   Set fields to what they want:
 
-For **filtered lists**:
-- "show me addresses under 900k with 3 bedrooms in San Fernando"
-    -> intent = "filtered_list_by_city_price_beds"
-       city = "San Fernando", maxPrice = 900000, minBeds = 3
-- "show me addresses in San Fernando that accept FHA"
-    -> intent = "filtered_list_by_city_price_beds"
-       city = "San Fernando", loanTermsIncludes = "FHA"
+   - "What is the high school district for 13121 Chase, Arleta, CA 91331?"
+       -> intent: "details"
+          targetType: "address"
+          fields: ["HighSchoolDistrict"]
 
-- For "all details for 33-35" or "give me beds and baths for 33-34":
-    intent = "details_for_index" or "beds_baths_for_index"
-    indices = [33,34]
+   - "How many days on market for 13121 Chase, Arleta, CA 91331?"
+       -> intent: "details"
+          targetType: "address"
+          fields: ["DaysOnMarket"]
 
-- Never include explanations or comments. Only output valid JSON.
+   - "What year was #34 built?"
+       -> intent: "details"
+          targetType: "index"
+          index: 34
+          fields: ["YearBuilt"]
+
+   - "Give me the full profile for #11"
+       -> intent: "details"
+          targetType: "index"
+          index: 11
+          fields: null   // null or [] means "default summary with lots of key fields"
+
+3. If the user message is *only* a number like "11" or "#11":
+   - They want details for that listing.
+   - intent = "details", targetType = "index", index = 11, fields = null.
+
+4. "Address" is a virtual field; you may include "Address" in fields and the server will format it.
+
+5. Greetings / chit-chat -> intent = "small_talk".
+
+6. If you're unsure what they want -> intent = "unknown".
+
+Return ONLY the JSON. No extra text.
 `;
 
 // -------------------- CHAT ENDPOINT --------------------
@@ -466,19 +480,21 @@ app.post('/api/chat', async (req, res) => {
       .json({ error: 'OPENAI_API_KEY is missing in .env' });
   }
 
-  // Simple greeting short-circuit
+  // quick greeting
   if (/^\s*(hi|hello|hey|hola)\s*$/i.test(userText)) {
     return res.json({
       reply:
-        "Hey! I'm Realtor GPT. I can search your MLS CSV. For example, try:\n\n" +
-        '• "show me all addresses in San Fernando"\n' +
-        '• "show me addresses under 900k with 3 beds in San Fernando"\n' +
-        '• "#11" (to see full details for listing 11)\n' +
-        '• "what is the average price for houses in San Fernando?"',
+        "Hey! I'm Realtor GPT. I can read your MLS CSV.\n\n" +
+        'Try asking:\n' +
+        '• "list addresses in zip 91340 with price and beds"\n' +
+        '• "show me all listings in San Fernando under 900k with 3+ beds"\n' +
+        '• "what is the high school district for 13121 Chase, Arleta, CA 91331"\n' +
+        '• "how many days on market for #5"\n' +
+        '• "full profile for #11"',
     });
   }
 
-  // Ask OpenAI to create a small intent JSON
+  // ---- call OpenAI planner ----
   let plan;
   try {
     const plannerMessages = [
@@ -486,21 +502,18 @@ app.post('/api/chat', async (req, res) => {
       ...history,
     ];
 
-    const response = await fetch(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: plannerMessages,
-          response_format: { type: 'json_object' },
-        }),
-      }
-    );
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: plannerMessages,
+        response_format: { type: 'json_object' },
+      }),
+    });
 
     const data = await response.json();
     if (!response.ok) {
@@ -512,494 +525,85 @@ app.post('/api/chat', async (req, res) => {
 
     const content = data.choices?.[0]?.message?.content || '{}';
     plan = JSON.parse(content);
-    console.log('📝 Planner intent:', JSON.stringify(plan, null, 2));
+    console.log('📝 Planner plan:', JSON.stringify(plan, null, 2));
   } catch (err) {
     console.error('Failed to get/parse planner output:', err);
     return res.status(500).json({ error: 'Failed to interpret query.' });
   }
 
-  // Default values
   const intent = plan.intent || 'unknown';
-  const city = plan.city || null;
-  const maxPrice = plan.maxPrice ?? null;
-  const minBeds = plan.minBeds ?? null;
-  const loanTermsIncludes = plan.loanTermsIncludes || null;
-  const index = plan.index ?? null;
-  const indices = Array.isArray(plan.indices) ? plan.indices : null;
-  const lastN = plan.lastN ?? null; // not used yet, but kept for future
-  const countOnly = !!plan.countOnly;
+  const filters = Array.isArray(plan.filters) ? plan.filters : [];
   const fields = Array.isArray(plan.fields) ? plan.fields : null;
-  const useLastListing = !!plan.useLastListing; // currently unused, kept for future
+  const targetType = plan.targetType || null;
+  const index = plan.index ?? null;
+  const limit = plan.limit ?? null;
+  const countOnly = !!plan.countOnly;
 
   let reply = '';
 
-  function ensureListingForIndex(idx) {
-    const listing = getListingByIndex(idx);
-    if (!listing) {
-      return { error: `I don't have a listing #${idx} in the last list.` };
-    }
-    lastListing = listing; // remember for follow-ups
-    return { listing };
-  }
-
   try {
-    switch (intent) {
-      // ---------- LISTING LIST INTENTS ----------
-      case 'list_addresses_by_city': {
-        const rows = filterRowsForList({ city });
-        const listFields = fields || [];
-        const wantsAllData = (listFields || [])
-          .map((f) => String(f).toLowerCase())
-          .includes('all_data');
-        const limit = wantsAllData ? 10 : 100;
+    if (intent === 'list') {
+      const rows = filterRows(filters);
 
-        if (countOnly) {
-          reply = `There are ${rows.length} listings that match your criteria.`;
+      if (countOnly) {
+        reply = `There are ${rows.length} listings that match your criteria.`;
+      } else {
+        reply = formatList(rows, fields, limit || 100);
+      }
+    } else if (intent === 'details') {
+      let row;
+      let addr;
+
+      if (targetType === 'index' && index != null) {
+        const resIdx = ensureListingFromIndex(index);
+        if (resIdx.error) {
+          reply = resIdx.error;
         } else {
-          reply = formatListOutput(rows, {
-            limit,
-            fields: listFields,
-          });
+          row = resIdx.row;
+          addr = resIdx.displayAddress;
         }
-        break;
-      }
-
-      case 'list_addresses_with_remarks': {
-        const rows = filterRowsForList({ city });
-        const limited = rows.slice(0, 50);
-
-        lastList = limited.map((row, idx) => ({
-          rowIndex: mlsRows.indexOf(row),
-          displayAddress: formatAddress(row),
-        }));
-
-        if (!limited.length) {
-          reply = 'There are 0 listings that match your criteria.';
-          break;
-        }
-
-        const lines = limited.map((row, i) => {
-          const addr = formatAddress(row);
-          const pub = (row.PublicRemarks || '').trim();
-          const priv = (row.PrivateRemarks || '').trim();
-          const descLines = [];
-          if (pub) descLines.push(`Public remarks: ${pub}`);
-          if (priv) descLines.push(`Private remarks: ${priv}`);
-          const desc = descLines.join(' | ') || 'No remarks in CSV.';
-          return `#${i + 1} ${addr}\n  ${desc}`;
-        });
-
-        reply =
-          `Here are up to ${limited.length} matching listings:\n` +
-          lines.join('\n\n');
-        break;
-      }
-
-      case 'filtered_list_by_city_price_beds': {
-        const rows = filterRowsForList({
-          city,
-          maxPrice,
-          minBeds,
-          loanTermsIncludes,
-        });
-
-        const listFields = fields || [];
-        const wantsAllData = (listFields || [])
-          .map((f) => String(f).toLowerCase())
-          .includes('all_data');
-        const limit = wantsAllData ? 10 : 100;
-
-        if (countOnly) {
-          reply = `There are ${rows.length} listings that match your criteria.`;
-        } else {
-          reply = formatListOutput(rows, {
-            limit,
-            fields: listFields,
-          });
-        }
-        break;
-      }
-
-      // ---------- AVERAGE PRICE ----------
-      case 'average_price_by_city': {
-        const rows = filterRowsForList({ city });
-
-        const prices = rows
-          .map((row) => Number(row.ListPrice || row.CurrentPrice))
-          .filter((n) => !Number.isNaN(n) && n > 0);
-
-        if (!prices.length) {
-          reply =
-            'I could not find any valid prices in the CSV for that city.';
-          break;
-        }
-
-        const sum = prices.reduce((a, b) => a + b, 0);
-        const avg = sum / prices.length;
-
-        reply =
-          `For ${city || 'the selected area'}, I found ${prices.length} listings with prices.\n` +
-          `Average price: $${Math.round(avg).toLocaleString()}.`;
-        break;
-      }
-
-      // ---------- DETAILS FOR INDICES / ADDRESSES ----------
-      case 'details_for_index': {
-        const idxs =
-          indices && indices.length
-            ? indices
-            : index != null
-            ? [index]
-            : [];
-
-        if (!idxs.length) {
-          reply =
-            "I couldn't tell which listing number you meant. Try something like '#11' or 'details for 11'.";
-          break;
-        }
-
-        const chunks = [];
-
-        for (const idx of idxs) {
-          const { listing, error } = ensureListingForIndex(idx);
-          if (error) {
-            chunks.push(error);
-            continue;
-          }
-          const row = listing.row;
-          const addr = listing.displayAddress || formatAddress(row);
-          const { text: bedsBathsText } = formatBedsBaths(row);
-          const priceText = formatPrice(row);
-          const description = formatDescription(row);
-          const loanTerms = formatLoanTerms(row);
-          const sqft = formatSqft(row);
-          const agent = formatAgent(row);
-
-          chunks.push(
-            `#${idx} ${addr}\n` +
-              `Price: ${priceText}\n` +
-              `Beds/Baths: ${bedsBathsText}\n` +
-              `Square footage: ${sqft}\n` +
-              `Loan terms: ${loanTerms}\n` +
-              `Listing agent: ${agent}\n` +
-              `Property description:\n${description}`
-          );
-        }
-
-        reply = chunks.join('\n\n');
-        break;
-      }
-
-      case 'details_for_address': {
+      } else if (targetType === 'address') {
         const listing = findListingByAddressLike(userText);
         if (!listing) {
           reply =
-            "I couldn't match that address to any listing in the CSV. Try copying the address as it appears in the list.";
-          break;
+            "I couldn't match that address to any listing in the CSV. Try copying it as it appears in the list.";
+        } else {
+          lastListing = listing;
+          row = listing.row;
+          addr = listing.displayAddress;
         }
-        lastListing = listing;
-
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-        const { text: bedsBathsText } = formatBedsBaths(row);
-        const priceText = formatPrice(row);
-        const description = formatDescription(row);
-        const loanTerms = formatLoanTerms(row);
-        const sqft = formatSqft(row);
-        const agent = formatAgent(row);
-
-        reply =
-          `${addr}\n` +
-          `Price: ${priceText}\n` +
-          `Beds/Baths: ${bedsBathsText}\n` +
-          `Square footage: ${sqft}\n` +
-          `Loan terms: ${loanTerms}\n` +
-          `Listing agent: ${agent}\n` +
-          `Property description:\n${description}`;
-        break;
-      }
-
-      // ---------- FULL PROFILE (ALL DATA) ----------
-      case 'full_profile_for_index': {
-        if (index == null) {
-          reply = "I couldn't tell which listing number you meant.";
-          break;
-        }
-        const { listing, error } = ensureListingForIndex(index);
-        if (error) {
-          reply = error;
-          break;
-        }
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-        lastListing = listing;
-
-        reply =
-          `Full profile for #${index} ${addr}:\n\n` + formatFullRow(row);
-        break;
-      }
-
-      case 'full_profile_for_address': {
-        const listing = findListingByAddressLike(userText);
-        if (!listing) {
-          reply =
-            "I couldn't match that address to any listing in the CSV. Try copying the address as it appears in the list.";
-          break;
-        }
-        lastListing = listing;
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-
-        reply = `Full profile for ${addr}:\n\n` + formatFullRow(row);
-        break;
-      }
-
-      case 'full_profile_about_last_listing': {
+      } else if (targetType === 'last') {
         if (!lastListing) {
           reply =
-            "I'm not sure which property you mean by 'it'. Ask about a specific listing first (for example, '#11').";
-          break;
+            "I'm not sure which property you mean. Ask about a specific listing first (for example, 'details for #11').";
+        } else {
+          row = lastListing.row;
+          addr = lastListing.displayAddress;
         }
-        const row = lastListing.row;
-        const addr = lastListing.displayAddress || formatAddress(row);
-
-        reply = `Full profile for ${addr}:\n\n` + formatFullRow(row);
-        break;
-      }
-
-      // ---------- BED / BATH ----------
-      case 'beds_baths_for_index': {
-        const idxs =
-          indices && indices.length
-            ? indices
-            : index != null
-            ? [index]
-            : [];
-
-        if (!idxs.length) {
-          reply = "I couldn't tell which listing number you meant.";
-          break;
-        }
-
-        const parts = [];
-        for (const idx of idxs) {
-          const { listing, error } = ensureListingForIndex(idx);
-          if (error) {
-            parts.push(error);
-            continue;
-          }
-          const row = listing.row;
-          const addr = listing.displayAddress || formatAddress(row);
-          const { text } = formatBedsBaths(row);
-          parts.push(`#${idx} ${addr} — ${text}`);
-        }
-
-        reply = parts.join('\n');
-        break;
-      }
-
-      case 'beds_baths_for_address': {
-        const listing = findListingByAddressLike(userText);
-        if (!listing) {
-          reply =
-            "I couldn't match that address to any listing in the CSV. Try copying the address as it appears in the list.";
-          break;
-        }
-        lastListing = listing;
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-        const { text } = formatBedsBaths(row);
-        reply = `${addr} — ${text}`;
-        break;
-      }
-
-      // ---------- AGENT ----------
-      case 'listing_agent_for_index': {
-        if (index == null) {
-          reply = "I couldn't tell which listing number you meant.";
-          break;
-        }
-        const { listing, error } = ensureListingForIndex(index);
-        if (error) {
-          reply = error;
-          break;
-        }
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-        const agentContact = formatAgentContact(row);
-        reply = `#${index} ${addr}\n\n${agentContact}`;
-        break;
-      }
-
-      case 'listing_agent_for_address': {
-        const listing = findListingByAddressLike(userText);
-        if (!listing) {
-          reply =
-            "I couldn't match that address to any listing in the CSV. Try copying the address as it appears in the list.";
-          break;
-        }
-        lastListing = listing;
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-        const agentContact = formatAgentContact(row);
-        reply = `${addr}\n\n${agentContact}`;
-        break;
-      }
-
-      // ---------- LOAN TERMS ----------
-      case 'loan_terms_for_index': {
-        if (index == null) {
-          reply = "I couldn't tell which listing number you meant.";
-          break;
-        }
-        const { listing, error } = ensureListingForIndex(index);
-        if (error) {
-          reply = error;
-          break;
-        }
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-        const terms = formatLoanTerms(row);
-        reply = `Loan terms for #${index} ${addr}:\n${terms}`;
-        break;
-      }
-
-      case 'loan_terms_for_address': {
-        const listing = findListingByAddressLike(userText);
-        if (!listing) {
-          reply =
-            "I couldn't match that address to any listing in the CSV. Try copying the address as it appears in the list.";
-          break;
-        }
-        lastListing = listing;
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-        const terms = formatLoanTerms(row);
-        reply = `Loan terms for ${addr}:\n${terms}`;
-        break;
-      }
-
-      // ---------- PROPERTY DESCRIPTION ----------
-      case 'description_for_index': {
-        if (index == null) {
-          reply = "I couldn't tell which listing number you meant.";
-          break;
-        }
-        const { listing, error } = ensureListingForIndex(index);
-        if (error) {
-          reply = error;
-          break;
-        }
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-        const description = formatDescription(row);
-        reply = `Property description for #${index} ${addr}:\n${description}`;
-        break;
-      }
-
-      case 'description_for_address': {
-        const listing = findListingByAddressLike(userText);
-        if (!listing) {
-          reply =
-            "I couldn't match that address to any listing in the CSV. Try copying the address as it appears in the list.";
-          break;
-        }
-        lastListing = listing;
-        const row = listing.row;
-        const addr = listing.displayAddress || formatAddress(row);
-        const description = formatDescription(row);
-        reply = `Property description for ${addr}:\n${description}`;
-        break;
-      }
-
-      // ---------- FOLLOW-UP ON LAST LISTING ----------
-      case 'followup_about_last_listing': {
-        if (!lastListing) {
-          reply =
-            "I'm not sure which property you mean by 'it'. Ask about a specific listing first (for example, 'details for #11').";
-          break;
-        }
-        const row = lastListing.row;
-        const addr = lastListing.displayAddress || formatAddress(row);
-        const f = (fields || []).map((x) => String(x).toLowerCase());
-        const parts = [`For ${addr}:`];
-
-        if (!fields || !fields.length) {
-          // default to a full summary if planner was vague
-          const { text: bedsBathsText } = formatBedsBaths(row);
-          parts.push(`Price: ${formatPrice(row)}`);
-          parts.push(`Beds/Baths: ${bedsBathsText}`);
-          parts.push(`Square footage: ${formatSqft(row)}`);
-          parts.push(`Loan terms: ${formatLoanTerms(row)}`);
-          parts.push(`Listing agent: ${formatAgent(row)}`);
-          parts.push(`Property description:\n${formatDescription(row)}`);
-          reply = parts.join('\n');
-          break;
-        }
-
-        if (f.includes('price')) parts.push(`Price: ${formatPrice(row)}`);
-        if (f.includes('beds') || f.includes('baths')) {
-          const { text } = formatBedsBaths(row);
-          parts.push(`Beds/Baths: ${text}`);
-        }
-        if (
-          f.includes('description') ||
-          f.includes('remarks') ||
-          f.includes('property_description')
-        ) {
-          parts.push(`Property description:\n${formatDescription(row)}`);
-        }
-        if (f.includes('loan_terms') || f.includes('financing')) {
-          parts.push(`Loan terms: ${formatLoanTerms(row)}`);
-        }
-        if (f.includes('address')) {
-          parts.push(`Address: ${addr}`);
-        }
-        if (
-          f.includes('square_footage') ||
-          f.includes('sqft') ||
-          f.includes('size')
-        ) {
-          parts.push(`Square footage: ${formatSqft(row)}`);
-        }
-        if (f.includes('agent')) {
-          parts.push(`Listing agent: ${formatAgent(row)}`);
-        }
-        if (f.includes('contact_info') || f.includes('contact')) {
-          parts.push(`Contact info:\n${formatAgentContact(row)}`);
-        }
-        if (f.includes('all_data') || f.includes('full_profile')) {
-          parts.push('\nFull profile:\n' + formatFullRow(row));
-        }
-
-        reply = parts.join('\n');
-        break;
-      }
-
-      // ---------- SMALL TALK / UNKNOWN ----------
-      case 'small_talk': {
+      } else {
         reply =
-          "Hey! I'm Realtor GPT. I’m wired up to your MLS CSV so you can ask things like:\n\n" +
-          '• "show me all addresses in San Fernando with price next to them"\n' +
-          '• "addresses under 900k with 3 beds in San Fernando"\n' +
-          '• "what are the loan terms for #13"\n' +
-          '• "what is the average price for houses in San Fernando?"\n' +
-          '• "give me the full profile for #11"';
-        break;
+          "I couldn't tell which specific listing you meant. Try '#11' or a full address like '123 Main St, Burbank, CA'.";
       }
 
-      case 'unknown':
-      default: {
-        reply =
-          "I'm not totally sure what you want yet. Try something like:\n" +
-          '• "show me all addresses in San Fernando with price next to them"\n' +
-          '• "show me addresses under 800k with 3 bedrooms in San Fernando"\n' +
-          '• "who is the listing agent for #13"\n' +
-          '• "how many beds and baths does 35 have?"\n' +
-          '• "what is the property description for #11?"\n' +
-          '• "what is the average price for houses in San Fernando?"\n' +
-          '• "full profile for #11"';
+      if (row) {
+        reply = formatDetails(row, fields);
       }
+    } else if (intent === 'small_talk') {
+      reply =
+        "Hey! I'm Realtor GPT. I’m wired up to your MLS CSV so you can ask things like:\n\n" +
+        '• "list addresses in zip 91340 with price and beds"\n' +
+        '• "show me all listings in San Fernando under 900k with 3+ beds"\n' +
+        '• "what is the high school district for 13121 Chase, Arleta, CA 91331"\n' +
+        '• "days on market for #5"\n' +
+        '• "full profile for #11"';
+    } else {
+      reply =
+        "I'm not totally sure what you want yet. Try something like:\n" +
+        '• "list addresses in zip 91340 with price next to them"\n' +
+        '• "show me listings under 900k with 3 beds in San Fernando"\n' +
+        '• "what is the high school district for 13121 Chase, Arleta, CA 91331"\n' +
+        '• "how many days on market does #5 have?"\n' +
+        '• "full profile for #11"';
     }
 
     return res.json({ reply });
@@ -1015,4 +619,3 @@ app.post('/api/chat', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
-
